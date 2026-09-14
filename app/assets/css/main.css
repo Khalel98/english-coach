@@ -1,0 +1,49 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+/*
+ * "static" forces Tailwind to emit every shade below even though most of
+ * them are never typed literally in our own templates — Nuxt UI's semantic
+ * `bg-primary` etc. reference the full moss-50..950 scale internally via
+ * `var(--color-moss-*)`, and a plain `@theme` block only keeps the shades
+ * Tailwind's content scanner sees used directly, which silently dropped
+ * moss-500 (the one Nuxt UI needs most) and left buttons transparent.
+ */
+@theme static {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Source Serif 4', ui-serif, Georgia, serif;
+
+  /* Moss — the app's one accent color. Muted and desaturated on purpose,
+     not a stock bright green, and kept separate from the semantic
+     success/error greens/reds used in result cards throughout the app. */
+  --color-moss-50: #F4F6F1;
+  --color-moss-100: #E6EBDF;
+  --color-moss-200: #CFDAC2;
+  --color-moss-300: #B0C29B;
+  --color-moss-400: #8FA878;
+  --color-moss-500: #74905C;
+  --color-moss-600: #5C7548;
+  --color-moss-700: #495C39;
+  --color-moss-800: #3A492E;
+  --color-moss-900: #2E3A26;
+  --color-moss-950: #1B2317;
+
+  /* Amber — used narrowly, only for the level badge in the sidebar. */
+  --color-amber-chip: #C99A3E;
+}
+
+:root {
+  --app-bg: #FBFAF7;
+  --app-bg-raised: #FFFFFF;
+}
+
+/* @nuxtjs/color-mode (bundled with @nuxt/ui) toggles this class on <html>. */
+.dark {
+  --app-bg: #14171F;
+  --app-bg-raised: #1B1F29;
+}
+
+body {
+  background-color: var(--app-bg);
+  font-family: var(--font-sans);
+}
