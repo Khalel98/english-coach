@@ -8,11 +8,11 @@ COPY . .
 RUN npm run build
 
 FROM base AS runtime
+COPY package.json package-lock.json ./
+RUN npm ci
 ENV NODE_ENV=production
 ENV NUXT_HOST=0.0.0.0
 ENV NUXT_PORT=3000
-COPY package.json package-lock.json ./
-RUN npm ci
 COPY --from=build /app/.output ./.output
 COPY drizzle.config.ts ./
 COPY server/db ./server/db
