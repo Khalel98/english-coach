@@ -1,5 +1,5 @@
-import { getGrammarTopicGroups } from '../../services/grammarDrillService'
+import { getGrammarTopicGroupsWithStats } from '../../services/grammarDrillService'
 
-export default defineEventHandler(() => {
-  return { groups: getGrammarTopicGroups() }
+export default defineEventHandler(async () => {
+  return { groups: await getGrammarTopicGroupsWithStats() }
 })

@@ -1,6 +1,7 @@
 import { z } from 'zod'
+import { eq, and, desc } from 'drizzle-orm'
 import { getDb } from '../db/client'
-import { grammarDrillLogs } from '../db/schema'
+import { grammarDrillLogs, grammarTopicExplanations, type GrammarDrillLogRow } from '../db/schema'
 import { OWNER_USER_ID } from '../utils/constants'
 import { getAllMistakes, recordMistake } from './memory'
 import { buildLearnerModel, listCandidates } from './learnerModel'
@@ -57,20 +58,52 @@ const GRAMMAR_TOPIC_LABEL_RU: Record<string, string> = {
 }
 
 export interface GrammarTopicGroup {
+  category: string
   categoryRu: string
   topics: { topic: string; labelRu: string }[]
+}
+
+export interface GrammarTopicSummary {
+  topic: string
+  labelRu: string
+  attempts: number
+  lastScore: { correct: number; total: number } | null
+  lastAttemptAt: string | null
+}
+
+export interface GrammarTopicGroupWithStats {
+  category: string
+  categoryRu: string
+  topics: GrammarTopicSummary[]
+}
+
+export interface GrammarTopicMeta {
+  labelRu: string
+  category: string
+  categoryRu: string
 }
 
 export function getAvailableTopics(): string[] {
   return FALLBACK_TOPICS
 }
 
-/** Grammar topics grouped by category, in a learning-friendly order, for the topic picker UI. */
+/** Looks up which category a topic belongs to and its Russian label. */
+export function findTopicMeta(topic: string): GrammarTopicMeta {
+  const group = GRAMMAR_TOPIC_GROUPS.find(g => g.topics.includes(topic))
+  return {
+    labelRu: GRAMMAR_TOPIC_LABEL_RU[topic] ?? topic.replace(/_/g, ' '),
+    category: group?.category ?? 'other',
+    categoryRu: group?.categoryRu ?? 'Другое',
+  }
+}
+
+/** Grammar topics grouped by category, in a learning-friendly order, for the module browser. */
 export function getGrammarTopicGroups(): GrammarTopicGroup[] {
   const known = new Set(FALLBACK_TOPICS)
   const grouped = new Set<string>()
 
   const groups = GRAMMAR_TOPIC_GROUPS.map(g => ({
+    category: g.category,
     categoryRu: g.categoryRu,
     topics: g.topics.filter(t => known.has(t)).map((t) => {
       grouped.add(t)
@@ -84,12 +117,68 @@ export function getGrammarTopicGroups(): GrammarTopicGroup[] {
   const leftover = FALLBACK_TOPICS.filter(t => !grouped.has(t))
   if (leftover.length > 0) {
     groups.push({
+      category: 'other',
       categoryRu: 'Другое',
       topics: leftover.map(t => ({ topic: t, labelRu: GRAMMAR_TOPIC_LABEL_RU[t] ?? t.replace(/_/g, ' ') })),
     })
   }
 
   return groups
+}
+
+/** Same grouping as getGrammarTopicGroups, annotated with this learner's attempt history for each topic. */
+export async function getGrammarTopicGroupsWithStats(): Promise<GrammarTopicGroupWithStats[]> {
+  const db = getDb()
+  const logs = await db.select().from(grammarDrillLogs).where(eq(grammarDrillLogs.userId, OWNER_USER_ID))
+
+  const byTopic = new Map<string, GrammarDrillLogRow[]>()
+  for (const log of logs) {
+    if (!byTopic.has(log.topic)) byTopic.set(log.topic, [])
+    byTopic.get(log.topic)!.push(log)
+  }
+
+  return getGrammarTopicGroups().map(g => ({
+    category: g.category,
+    categoryRu: g.categoryRu,
+    topics: g.topics.map((t) => {
+      const attempts = byTopic.get(t.topic) ?? []
+      const last = attempts.reduce<GrammarDrillLogRow | null>(
+        (latest, cur) => (!latest || cur.completedAt > latest.completedAt ? cur : latest),
+        null,
+      )
+      return {
+        topic: t.topic,
+        labelRu: t.labelRu,
+        attempts: attempts.length,
+        lastScore: last ? { correct: last.correct, total: last.total } : null,
+        lastAttemptAt: last ? last.completedAt.toISOString() : null,
+      }
+    }),
+  }))
+}
+
+/** This learner's past attempts for one topic, most recent first. */
+export async function getTopicHistory(topic: string): Promise<{ correct: number; total: number; completedAt: string }[]> {
+  const db = getDb()
+  const rows = await db.select().from(grammarDrillLogs)
+    .where(and(eq(grammarDrillLogs.userId, OWNER_USER_ID), eq(grammarDrillLogs.topic, topic)))
+    .orderBy(desc(grammarDrillLogs.completedAt))
+  return rows.map(r => ({ correct: r.correct, total: r.total, completedAt: r.completedAt.toISOString() }))
+}
+
+/** This learner's full grammar-drill history across all topics, most recent first. */
+export async function getAllHistory(): Promise<{ topic: string; labelRu: string; correct: number; total: number; completedAt: string }[]> {
+  const db = getDb()
+  const rows = await db.select().from(grammarDrillLogs)
+    .where(eq(grammarDrillLogs.userId, OWNER_USER_ID))
+    .orderBy(desc(grammarDrillLogs.completedAt))
+  return rows.map(r => ({
+    topic: r.topic,
+    labelRu: findTopicMeta(r.topic).labelRu,
+    correct: r.correct,
+    total: r.total,
+    completedAt: r.completedAt.toISOString(),
+  }))
 }
 
 /** Picks the learner's weakest confirmed grammar topic, or — if nothing is confirmed weak yet — a topic near their current level (not a random one from the whole A1-C2 range). */
@@ -111,8 +200,60 @@ export async function pickDrillTopic(): Promise<string> {
   return pool[Math.floor(Math.random() * pool.length)]!
 }
 
+const explanationSchema = z.object({ explanationRu: z.string() })
+
+const EXPLANATION_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    explanationRu: { type: 'STRING' },
+  },
+  required: ['explanationRu'],
+}
+
+/**
+ * The lesson explanation for a topic — generated once and cached, since
+ * it's the same reference material regardless of which quiz attempt the
+ * learner is on. Quiz questions (generateGrammarDrill) are generated fresh
+ * every attempt instead.
+ */
+export async function getTopicExplanation(topic: string): Promise<{ topic: string; explanationRu: string }> {
+  const db = getDb()
+  const [existing] = await db.select().from(grammarTopicExplanations).where(eq(grammarTopicExplanations.topic, topic))
+  if (existing) {
+    return { topic, explanationRu: existing.explanationRu }
+  }
+
+  const apiKey = useRuntimeConfig().geminiApiKey
+  if (!apiKey) {
+    throw createError({ statusCode: 500, statusMessage: 'GEMINI_API_KEY is not configured' })
+  }
+
+  const readableTopic = topic.replace(/_/g, ' ')
+  const systemPrompt = `Write a thorough English-grammar lesson explanation IN RUSSIAN for the grammar point "${readableTopic}", aimed at a Russian-speaking English learner.
+
+Structure it as several short paragraphs (separated by "\\n\\n"):
+1. What the rule is and when it's used.
+2. How it's formed (the structure/pattern), with 2-3 English example sentences showing correct usage.
+3. A common mistake Russian-speaking learners make with this rule, and how to avoid it.
+
+Keep it clear and concrete, not overly academic — aim for genuinely useful teaching, not a one-line dictionary definition.
+
+Respond with JSON only: { "explanationRu": "..." }`
+
+  const raw = await generateWithGemini({
+    apiKey,
+    systemPrompt,
+    contents: [{ role: 'user', parts: [{ text: `Grammar topic: ${readableTopic}` }] }],
+    responseSchema: EXPLANATION_RESPONSE_SCHEMA,
+    callerLabel: 'grammarExplanation',
+  })
+
+  const parsed = explanationSchema.parse(JSON.parse(raw))
+  await db.insert(grammarTopicExplanations).values({ topic, explanationRu: parsed.explanationRu }).onConflictDoNothing()
+  return { topic, explanationRu: parsed.explanationRu }
+}
+
 const drillSchema = z.object({
-  explanationRu: z.string(),
   questions: z.array(z.object({
     prompt: z.string(),
     options: z.array(z.string()).length(4),
@@ -123,7 +264,6 @@ const drillSchema = z.object({
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    explanationRu: { type: 'STRING' },
     questions: {
       type: 'ARRAY',
       items: {
@@ -137,7 +277,7 @@ const RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ['explanationRu', 'questions'],
+  required: ['questions'],
 }
 
 export async function generateGrammarDrill(topic: string): Promise<GrammarDrillView> {
@@ -149,15 +289,7 @@ export async function generateGrammarDrill(topic: string): Promise<GrammarDrillV
   const profile = await getUserProfile()
   const readableTopic = topic.replace(/_/g, ' ')
 
-  const systemPrompt = `Create a grammar practice drill for an English learner (level: ${profile.estimatedLevel}), targeting the grammar point "${readableTopic}".
-
-Write:
-- "explanationRu": a thorough explanation IN RUSSIAN of this grammar rule, structured as several short paragraphs (separated by "\\n\\n"):
-  1. What the rule is and when it's used.
-  2. How it's formed (the structure/pattern), with 2-3 English example sentences showing correct usage.
-  3. A common mistake Russian-speaking learners make with this rule, and how to avoid it.
-  Keep it clear and concrete, not overly academic — aim for genuinely useful teaching, not a one-line dictionary definition.
-- "questions": exactly 5 multiple-choice questions (4 options each, one correct) in English that practice this specific grammar point. Vary the sentences and contexts — don't reuse the same examples from the explanation. Difficulty should match a ${profile.estimatedLevel} learner.
+  const systemPrompt = `Create exactly 5 multiple-choice practice questions (4 options each, one correct) in English for an English learner (level: ${profile.estimatedLevel}), targeting the grammar point "${readableTopic}". Vary the sentences and contexts. Difficulty should match a ${profile.estimatedLevel} learner.
 
 Respond with JSON only.`
 

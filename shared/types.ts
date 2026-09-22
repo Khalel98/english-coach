@@ -170,7 +170,6 @@ export interface GrammarDrillQuestion {
 
 export interface GrammarDrillView {
   topic: string
-  explanationRu: string
   questions: GrammarDrillQuestion[]
 }
 

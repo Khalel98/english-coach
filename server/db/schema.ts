@@ -112,3 +112,11 @@ export const grammarDrillLogs = pgTable('grammar_drill_logs', {
 
 export type GrammarDrillLogRow = typeof grammarDrillLogs.$inferSelect
 export type NewGrammarDrillLogRow = typeof grammarDrillLogs.$inferInsert
+
+export const grammarTopicExplanations = pgTable('grammar_topic_explanations', {
+  topic: text('topic').primaryKey(),
+  explanationRu: text('explanation_ru').notNull(),
+  generatedAt: timestamp('generated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export type GrammarTopicExplanationRow = typeof grammarTopicExplanations.$inferSelect
