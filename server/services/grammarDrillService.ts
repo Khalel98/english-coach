@@ -21,8 +21,75 @@ const ENGLISH_LEVEL_TO_CEFR_INDEX: Record<EnglishLevel, number> = {
   advanced: 4,
 }
 
+/**
+ * Curated, pedagogically-ordered grouping of grammar topics — the
+ * placement-test topic list is ordered by CEFR level only, which mixes
+ * unrelated topics together (e.g. articles right next to present simple)
+ * and gives learners no sense of how topics relate to each other.
+ */
+const GRAMMAR_TOPIC_GROUPS: { category: string; categoryRu: string; topics: string[] }[] = [
+  { category: 'basics', categoryRu: 'Основы', topics: ['be_verb', 'articles', 'countable_uncountable', 'comparatives'] },
+  { category: 'tenses', categoryRu: 'Времена', topics: ['present_simple', 'past_simple', 'present_perfect', 'past_perfect'] },
+  { category: 'modals', categoryRu: 'Модальные глаголы', topics: ['modal_verbs', 'nuanced_modality'] },
+  { category: 'conditionals', categoryRu: 'Условные предложения', topics: ['first_conditional', 'second_conditional', 'third_conditional'] },
+  { category: 'structures', categoryRu: 'Конструкции предложения', topics: ['passive_voice', 'inversion', 'advanced_inversion', 'cleft_sentences', 'subjunctive'] },
+]
+
+const GRAMMAR_TOPIC_LABEL_RU: Record<string, string> = {
+  be_verb: 'Глагол to be',
+  articles: 'Артикли (a / an / the)',
+  countable_uncountable: 'Исчисляемые и неисчисляемые существительные',
+  comparatives: 'Сравнительная степень',
+  present_simple: 'Present Simple',
+  past_simple: 'Past Simple',
+  present_perfect: 'Present Perfect',
+  past_perfect: 'Past Perfect',
+  modal_verbs: 'Модальные глаголы (can, must, should…)',
+  nuanced_modality: 'Тонкости модальности',
+  first_conditional: 'Первое условное (First Conditional)',
+  second_conditional: 'Второе условное (Second Conditional)',
+  third_conditional: 'Третье условное (Third Conditional)',
+  passive_voice: 'Страдательный залог (Passive Voice)',
+  inversion: 'Инверсия',
+  advanced_inversion: 'Продвинутая инверсия',
+  cleft_sentences: 'Расщеплённые предложения (Cleft Sentences)',
+  subjunctive: 'Сослагательное наклонение (Subjunctive)',
+}
+
+export interface GrammarTopicGroup {
+  categoryRu: string
+  topics: { topic: string; labelRu: string }[]
+}
+
 export function getAvailableTopics(): string[] {
   return FALLBACK_TOPICS
+}
+
+/** Grammar topics grouped by category, in a learning-friendly order, for the topic picker UI. */
+export function getGrammarTopicGroups(): GrammarTopicGroup[] {
+  const known = new Set(FALLBACK_TOPICS)
+  const grouped = new Set<string>()
+
+  const groups = GRAMMAR_TOPIC_GROUPS.map(g => ({
+    categoryRu: g.categoryRu,
+    topics: g.topics.filter(t => known.has(t)).map((t) => {
+      grouped.add(t)
+      return { topic: t, labelRu: GRAMMAR_TOPIC_LABEL_RU[t] ?? t.replace(/_/g, ' ') }
+    }),
+  })).filter(g => g.topics.length > 0)
+
+  // Any topic that shows up in the data but wasn't placed in a curated
+  // group (e.g. a newly-added placement-test topic) still needs to be
+  // reachable — surface it under a catch-all group instead of dropping it.
+  const leftover = FALLBACK_TOPICS.filter(t => !grouped.has(t))
+  if (leftover.length > 0) {
+    groups.push({
+      categoryRu: 'Другое',
+      topics: leftover.map(t => ({ topic: t, labelRu: GRAMMAR_TOPIC_LABEL_RU[t] ?? t.replace(/_/g, ' ') })),
+    })
+  }
+
+  return groups
 }
 
 /** Picks the learner's weakest confirmed grammar topic, or — if nothing is confirmed weak yet — a topic near their current level (not a random one from the whole A1-C2 range). */
@@ -82,11 +149,15 @@ export async function generateGrammarDrill(topic: string): Promise<GrammarDrillV
   const profile = await getUserProfile()
   const readableTopic = topic.replace(/_/g, ' ')
 
-  const systemPrompt = `Create a short grammar practice drill for an English learner (level: ${profile.estimatedLevel}), targeting the grammar point "${readableTopic}".
+  const systemPrompt = `Create a grammar practice drill for an English learner (level: ${profile.estimatedLevel}), targeting the grammar point "${readableTopic}".
 
 Write:
-- "explanationRu": a brief, clear explanation IN RUSSIAN of this grammar rule (2-4 sentences), including one example sentence in English showing correct usage.
-- "questions": exactly 5 multiple-choice questions (4 options each, one correct) in English that practice this specific grammar point. Vary the sentences and contexts — don't reuse the same example from the explanation. Difficulty should match a ${profile.estimatedLevel} learner.
+- "explanationRu": a thorough explanation IN RUSSIAN of this grammar rule, structured as several short paragraphs (separated by "\\n\\n"):
+  1. What the rule is and when it's used.
+  2. How it's formed (the structure/pattern), with 2-3 English example sentences showing correct usage.
+  3. A common mistake Russian-speaking learners make with this rule, and how to avoid it.
+  Keep it clear and concrete, not overly academic — aim for genuinely useful teaching, not a one-line dictionary definition.
+- "questions": exactly 5 multiple-choice questions (4 options each, one correct) in English that practice this specific grammar point. Vary the sentences and contexts — don't reuse the same examples from the explanation. Difficulty should match a ${profile.estimatedLevel} learner.
 
 Respond with JSON only.`
 

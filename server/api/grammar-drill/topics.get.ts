@@ -1,5 +1,5 @@
-import { getAvailableTopics } from '../../services/grammarDrillService'
+import { getGrammarTopicGroups } from '../../services/grammarDrillService'
 
 export default defineEventHandler(() => {
-  return { topics: getAvailableTopics() }
+  return { groups: getGrammarTopicGroups() }
 })

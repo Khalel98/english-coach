@@ -1,23 +1,42 @@
 <script setup lang="ts">
 import type { GrammarDrillView } from '../../../shared/types'
 
+interface GrammarTopicGroup {
+  categoryRu: string
+  topics: { topic: string; labelRu: string }[]
+}
+
 type Phase = 'intro' | 'loading' | 'drill' | 'result'
 
 const phase = ref<Phase>('intro')
-const topics = ref<string[]>([])
+const groups = ref<GrammarTopicGroup[]>([])
 const chosenTopic = ref<string | undefined>(undefined)
 const drill = ref<GrammarDrillView | null>(null)
 const answers = ref<(number | null)[]>([])
 const score = ref<{ correct: number; total: number } | null>(null)
 
 const topicOptions = computed(() => [
-  { label: 'Автоматически (моя слабая тема)', value: undefined },
-  ...topics.value.map(t => ({ label: t.replace(/_/g, ' '), value: t })),
+  [{ label: 'Автоматически (моя слабая тема)', value: undefined }],
+  ...groups.value.map(g => [
+    { type: 'label' as const, label: g.categoryRu },
+    ...g.topics.map(t => ({ label: t.labelRu, value: t.topic })),
+  ]),
 ])
 
+const explanationParagraphs = computed(() => (drill.value?.explanationRu ?? '').split(/\n{2,}/).filter(Boolean))
+
+const topicLabel = computed(() => {
+  if (!drill.value) return ''
+  for (const g of groups.value) {
+    const match = g.topics.find(t => t.topic === drill.value!.topic)
+    if (match) return match.labelRu
+  }
+  return drill.value.topic.replace(/_/g, ' ')
+})
+
 async function loadTopics() {
-  const res = await $fetch<{ topics: string[] }>('/api/grammar-drill/topics')
-  topics.value = res.topics
+  const res = await $fetch<{ groups: GrammarTopicGroup[] }>('/api/grammar-drill/topics')
+  groups.value = res.groups
 }
 
 async function startDrill() {
@@ -83,10 +102,10 @@ onMounted(loadTopics)
     <template v-else-if="phase === 'drill' && drill">
       <div class="rounded-lg border border-stone-200 dark:border-stone-800 p-5 mb-4">
         <div class="text-xs text-stone-400 uppercase tracking-wide mb-2">
-          {{ drill.topic.replace(/_/g, ' ') }}
+          {{ topicLabel }}
         </div>
-        <p class="text-sm text-stone-600 dark:text-stone-300">
-          {{ drill.explanationRu }}
+        <p v-for="(para, pi) in explanationParagraphs" :key="pi" class="text-sm text-stone-600 dark:text-stone-300 mb-2 last:mb-0 whitespace-pre-line">
+          {{ para }}
         </p>
       </div>
 
